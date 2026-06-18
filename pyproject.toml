@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uribrowser"
+version = "0.1.4"
+description = "browser:// URI capability pack bundle"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = ["uricontrol>=0.1.8"]
+
+[project.optional-dependencies]
+real = ["playwright>=1.40"]
+
+[tool.uv.sources]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["uribrowserdocker*", "uribrowseredge*"]
+
+[tool.setuptools.package-data]
+uribrowserdocker = ["manifest.yaml"]
+
+[project.scripts]
+urisys-browser = "uribrowseredge.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

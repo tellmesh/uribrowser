@@ -1,0 +1,54 @@
+id: uribrowserdocker
+version: 0.1.0
+scheme: browser
+
+uri_patterns:
+  - pattern: browser://{session}/query/status
+    kind: query
+    operation: browser.status
+    side_effects: false
+    approval: not_required
+  - pattern: browser://{session}/page/command/open
+    kind: command
+    operation: browser.page.open
+    side_effects: true
+    approval: required
+  - pattern: browser://{session}/page/open
+    kind: command
+    operation: browser.page.open
+    side_effects: true
+    approval: required
+  - pattern: browser://{session}/page/query/dom
+    kind: query
+    operation: browser.page.dom
+    side_effects: false
+    approval: not_required
+  - pattern: browser://{session}/page/command/screenshot
+    kind: command
+    operation: browser.page.screenshot
+    side_effects: true
+    approval: required
+  - pattern: browser://{session}/page/active/screenshot
+    kind: command
+    operation: browser.page.screenshot
+    side_effects: true
+    approval: required
+  - pattern: browser://{session}/form/command/submit
+    kind: command
+    operation: browser.form.submit
+    side_effects: true
+    approval: required
+  - pattern: browser://{session}/social/command/publish-post
+    kind: command
+    operation: browser.social.publish_post
+    side_effects: true
+    approval: required
+
+handlers:
+  python:
+    browser.status: python://uribrowserdocker.handlers:status
+    browser.page.open: python://uribrowserdocker.handlers:open_page
+    browser.page.dom: python://uribrowserdocker.handlers:get_dom
+    browser.page.screenshot: python://uribrowserdocker.handlers:screenshot
+    browser.form.submit: python://uribrowserdocker.handlers:submit_form
+    browser.social.publish_post: python://uribrowserdocker.handlers:publish_post
