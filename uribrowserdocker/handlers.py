@@ -1,9 +1,23 @@
 from __future__ import annotations
 import base64
 import os
+import shutil
+import subprocess
+import sys
 import time
 import webbrowser
 from pathlib import Path
+
+
+def _system_open(url: str) -> None:
+    """Open URL in the desktop default browser (Wayland-safe on Linux)."""
+    if sys.platform.startswith("linux"):
+        for cmd in ("xdg-open", "gio", "sensible-browser"):
+            exe = shutil.which(cmd)
+            if exe:
+                subprocess.Popen([exe, url], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+    webbrowser.open(url)
 
 
 def _profile(context):
@@ -59,7 +73,7 @@ def open_page(payload, context):
     if driver == 'system-open':
         if not context.get('allow_real') and not os.environ.get('URISYS_ALLOW_REAL'):
             raise PermissionError('system-open requires context.allow_real=true or URISYS_ALLOW_REAL=1')
-        webbrowser.open(url)
+        _system_open(url)
         title = 'Opened by system browser'
         html = '<html><body>Opened in external browser</body></html>'
     elif driver == 'playwright':
@@ -176,7 +190,7 @@ def publish_post(payload, context):
     if driver == 'system-open':
         if not context.get('allow_real') and not os.environ.get('URISYS_ALLOW_REAL'):
             raise PermissionError('system-open requires context.allow_real=true or URISYS_ALLOW_REAL=1')
-        webbrowser.open(url)
+        _system_open(url)
         return {
             'published': False,
             'opened': True,
@@ -254,6 +268,7 @@ def publish_post(payload, context):
             raise PermissionError('cdp publish requires context.allow_real=true or URISYS_ALLOW_REAL=1')
         endpoint = _cdp_endpoint(profile, payload)
         submit = bool(payload.get('submit', False))
+        compose_url = str(payload.get('url') or _linkedin_compose_url(text))
         with sync_playwright() as p:
             try:
                 browser = p.chromium.connect_over_cdp(endpoint)
@@ -264,44 +279,77 @@ def publish_post(payload, context):
                 ) from exc
             ctx = browser.contexts[0] if browser.contexts else browser.new_context()
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
-            page.goto('https://www.linkedin.com/feed/', wait_until='domcontentloaded', timeout=60000)
+            page.goto(compose_url, wait_until='domcontentloaded', timeout=60000)
             time.sleep(3)
             if '/login' in page.url or '/checkpoint' in page.url:
                 return {
                     'published': False, 'opened': True, 'platform': platform,
                     'url': page.url, 'driver': driver, 'chars': len(text),
-                    'hint': 'CDP Chrome is not logged in to LinkedIn',
+                    'hint': 'CDP Chrome is not logged in to LinkedIn — run _upgrade-cdp after login in chrome-cdp profile',
                 }
             page.keyboard.press('Escape')
             time.sleep(0.5)
-            page.evaluate(
-                """() => { const b=[...document.querySelectorAll('button,div[role="button"]')]"""
-                """.find(el => /start a post/i.test(el.textContent||'')); if(b) b.click(); }"""
-            )
-            time.sleep(2)
-            editor = page.locator('div[role="textbox"]').first
-            try:
-                editor.wait_for(timeout=15000)
-            except Exception:
+            editor = None
+            for selector in (
+                'div[role="textbox"]',
+                'div[contenteditable="true"]',
+                '.ql-editor',
+                'div[data-placeholder*="myśli"]',
+                'div[data-placeholder*="mind"]',
+                'div[data-placeholder*="post"]',
+            ):
+                loc = page.locator(selector).first
+                try:
+                    loc.wait_for(timeout=8000)
+                    editor = loc
+                    break
+                except Exception:
+                    continue
+            if editor is None:
+                page.evaluate(
+                    """() => { const b=[...document.querySelectorAll('button,div[role="button"],span,div')]"""
+                    """.find(el => /start a post|what.s on your mind|co masz na myśli|rozpocznij publikowanie/i"""
+                    """.test((el.textContent||'').trim())); if(b) b.click(); }"""
+                )
+                time.sleep(2)
+                for selector in ('div[role="textbox"]', 'div[contenteditable="true"]', '.ql-editor'):
+                    loc = page.locator(selector).first
+                    try:
+                        loc.wait_for(timeout=12000)
+                        editor = loc
+                        break
+                    except Exception:
+                        continue
+            if editor is None:
                 return {
                     'published': False, 'drafted': False, 'opened': True, 'manual_submit': True,
                     'platform': platform, 'url': page.url, 'driver': driver, 'chars': len(text),
                     'hint': 'Share dialog editor not found — finish manually',
                 }
             editor.click(force=True)
-            editor.fill(text)
+            if text:
+                editor.fill(text)
             time.sleep(1)
             if not submit:
                 return {
-                    'published': False, 'drafted': True, 'manual_submit': True,
+                    'published': False, 'drafted': bool(text), 'manual_submit': True,
                     'platform': platform, 'url': page.url, 'driver': driver, 'chars': len(text),
                     'hint': 'Draft composed via CDP; pass submit=true to post automatically',
                 }
             clicked = page.evaluate(
-                """() => { const c=[...document.querySelectorAll('button')];"""
-                """ for (const el of c.reverse()) { const t=(el.innerText||el.textContent||'').trim();"""
-                """ const a=(el.getAttribute('aria-label')||'').trim();"""
-                """ if(/^post$/i.test(t)||/^post$/i.test(a)){ el.click(); return true; } } return false; }"""
+                """() => {"""
+                """ const match = (el) => {"""
+                """   const t = (el.innerText || el.textContent || '').trim();"""
+                """   const a = (el.getAttribute('aria-label') || '').trim();"""
+                """   return /^(post|opublikuj|publikuj)$/i.test(t) || /^(post|opublikuj|publikuj)$/i.test(a);"""
+                """ };"""
+                """ const candidates = ["""
+                """   ...document.querySelectorAll('button.share-actions__primary-action'),"""
+                """   ...document.querySelectorAll('button[data-control-name=\"share.post\"]'),"""
+                """   ...document.querySelectorAll('button'),"""
+                """ ];"""
+                """ for (const el of candidates.reverse()) { if (match(el) && !el.disabled) { el.click(); return true; } }"""
+                """ return false; }"""
             )
             time.sleep(6)
             return {
